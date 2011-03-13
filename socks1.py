@@ -79,9 +79,14 @@ class Socks5Thread(threading.Thread):
   def run(self):
     resp = S5Resp()
     try:
-      self.s.recv(255)
+      buf = self.s.recv(255)
+      if not buf:
+        raise socket.error
+      
       self.s.send("\x05\x00")
       buf = self.s.recv(4)
+      if not buf:
+        raise socket.error
       req = S5Req(buf)
       
       if req.ver != 5:
@@ -99,6 +104,9 @@ class Socks5Thread(threading.Thread):
         count = 6
         
       buf = self.s.recv(count)
+      if not buf:
+        raise socket.error
+      
       if not req.parse_netloc(buf):
         raise socket.error
       
@@ -106,7 +114,6 @@ class Socks5Thread(threading.Thread):
         try:
           addr = socket.gethostbyname(req.dst_addr)
         except socket.error:
-          print "gethostbyname error"
           resp.rep = 4
           raise Socks5Error
       else:
