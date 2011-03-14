@@ -4,7 +4,7 @@ import select
 import threading
 import struct
 import time
-
+      
 class S5Req:
   def __init__(self,buf):
     self.ver, self.cmd, self.rsv, self.atyp = struct.unpack("BBBB", buf[0:4])
@@ -22,23 +22,25 @@ class S5Req:
     if len(buf) < 6:
       return False
     self.dst_addr = socket.inet_ntoa(buf[0:4])
-    self.parse_port(buf[4:])
-    return True
+    if self.parse_port(buf[4:]):
+      return True
+    return False
   
-  def parse_dns(self,buf):
+  def parse_domain_name(self,buf):
     buf_size = len(buf)
     if buf_size < 1:
       return False
     name_len = struct.unpack("B",buf[0:1])[0]
-    if buf_size < name_len+1:
+    if name_len+3 != buf_size:
       return False
     self.dst_addr = buf[1:name_len+1]
-    self.parse_port(buf[1+name_len:])
-    return True
+    if self.parse_port(buf[1+name_len:]):
+      return True
+    return False
     
   def parse_netloc(self,buf):
     if self.atyp == 3:
-      return self.parse_dns(buf)
+      return self.parse_domain_name(buf)
     if self.atyp == 1:
       return self.parse_ipv4(buf)
     return False
@@ -46,7 +48,7 @@ class S5Req:
 class S5Resp:
   def __init__(self):
     self.ver = 5
-    self.rep = 0
+    self.rep = 1
     self.rsv = 0
     self.atyp = 1
     self.bnd_addr = None
@@ -67,7 +69,7 @@ class Socks5Error(Exception):
 
 class Socks5Thread(threading.Thread):
   wait = 8.0
-  buf_size = 1024*2
+  buf_size = 1024*4
   
   def __init__(self,s,ip,port):
     self.s = s
@@ -85,10 +87,10 @@ class Socks5Thread(threading.Thread):
       
       self.s.send("\x05\x00")
       buf = self.s.recv(4)
-      if not buf:
+      if not buf or len(buf) != 4:
         raise socket.error
-      req = S5Req(buf)
       
+      req = S5Req(buf)      
       if req.ver != 5:
         resp.rep = 1
         raise Socks5Error
@@ -108,7 +110,8 @@ class Socks5Thread(threading.Thread):
         raise socket.error
       
       if not req.parse_netloc(buf):
-        raise socket.error
+        resp.rep = 1
+        raise Socks5Error
       
       if req.atyp == 3:
         try:
@@ -131,15 +134,14 @@ class Socks5Thread(threading.Thread):
       resp.dst_addr = addr
       resp.dst_port = port
       self.s.send(resp.pack())
+      
+      self.forward_loop()
 
     except Socks5Error:
       self.s.send(resp.pack())
     
     except socket.error:
       pass
-    
-    else:
-      self.forward_loop()
       
     finally:
       if self.s:
@@ -148,34 +150,23 @@ class Socks5Thread(threading.Thread):
         self.dst_s.close()
       
   def forward_loop(self):
-    stop = False
     while 1:
       r,w,x = select.select([self.s,self.dst_s],[],[],self.wait)
-      if len(r) == 0: 
+      if not r:
         break
-      try:
-        for s in r:
-          if s is self.s:
-            buf = self.s.recv(self.buf_size)
-            if buf:
-              self.dst_s.send(buf)
-            else:
-              stop = True
-          if s is self.dst_s:
-            buf = self.dst_s.recv(self.buf_size)
-            if buf:
-              self.s.send(buf)
-            else:
-              stop = True
-          if stop:
-            break
-      except socket.error:
-        break
-      if stop:
-        break
+      
+      for s in r:
+        if s is self.s:
+          buf = self.s.recv(self.buf_size)
+          if not buf:
+            raise socket.error
+          self.dst_s.send(buf)
+        if s is self.dst_s:
+          buf = self.dst_s.recv(self.buf_size)
+          if not buf:
+            raise socket.error              
+          self.s.send(buf)
       time.sleep(0.01)
-        
-    return None 
     
 class Socks5(threading.Thread):
   def __init__(self,ip="0.0.0.0",port=8080):
