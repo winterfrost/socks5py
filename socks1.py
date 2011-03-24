@@ -153,7 +153,7 @@ class Socks5Thread(threading.Thread):
     while 1:
       r,w,x = select.select([self.s,self.dst_s],[],[],self.wait)
       if not r:
-        break
+        continue
       
       for s in r:
         if s is self.s:
